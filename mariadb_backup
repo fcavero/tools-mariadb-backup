@@ -1,0 +1,199 @@
+#!/bin/bash
+
+################################################################################
+# Shell script to backup MariaDB databases.
+################################################################################
+#
+# Este script puede programarse en el crontab con las siguientes opciones 
+# (ojo a las rutas, que tendrán que adecuarse convenientemente):
+# 
+# 0 1 * * * /<ruta>/mariadb-backup /<ruta>/mariadb-backup.conf > /<ruta>/mariadb-backup.log 2>&1
+#
+################################################################################
+
+# GNU/Linux bin paths
+CHOWN="$(which chown)"
+CHMOD="$(which chmod)"
+DATE="$(which date)"
+EXPR="$(which expr)"
+FIND="$(which find)"
+GZIP="$(which gzip)"
+ID="$(which id)"
+MKDIR="$(which mkdir)"
+MV="$(which mv)"
+MYSQLDUMP="$(which mysqldump)"
+
+################################################################################
+# HELPER FUNCTIONS
+################################################################################
+##
+# Function that shows an error message and abort backup process.
+#   $1 error description.
+##
+function showErrorAndExit()
+{
+  NOW=$(date +"%Y/%m/%d-%T")
+  echo  $NOW "[ ERROR ] $1. Aborting." 1>&2
+  exit 1
+}
+
+##
+# Function that perform the backup process depending upon period given.
+#   $1 period ( monthly | weekly | daily ) 
+##
+function doBackups()
+{
+  PERIOD=$1
+  
+  if [ $PERIOD == "daily" ];
+  then
+    SCHEMA_ONLY_DB_LIST=$D_SCHEMA_ONLY_DB_LIST
+    FULL_BACKUP_DB_LIST=$D_FULL_BACKUP_DB_LIST
+  elif [ $PERIOD == "weekly" ];
+  then
+    SCHEMA_ONLY_DB_LIST=$W_SCHEMA_ONLY_DB_LIST
+    FULL_BACKUP_DB_LIST=$W_FULL_BACKUP_DB_LIST
+  else
+    SCHEMA_ONLY_DB_LIST=$M_SCHEMA_ONLY_DB_LIST
+    FULL_BACKUP_DB_LIST=$M_FULL_BACKUP_DB_LIST
+  fi
+  
+  echo -e "\n--------------------------------------------"  
+  FINAL_BACKUP_DIR=$BACKUP_DIR"`$DATE +\%Y\%m\%d`-$PERIOD/"
+
+  echo "Making backup directory in $FINAL_BACKUP_DIR"
+  if ! $MKDIR -p $FINAL_BACKUP_DIR;
+  then
+    showErrorAndExit "Cannot create backup directory in $FINAL_BACKUP_DIR"
+  fi;
+
+  #### Schema-only backups ####
+  echo -e "\nSchema-only backups ($PERIOD)"
+  echo -e "--------------------------------------------"
+
+  if [[ $SCHEMA_ONLY_DB_LIST ]];
+  then
+    echo -e "The following databases were matched for $PERIOD schema-only backup:\n${SCHEMA_ONLY_DB_LIST}\n"
+  
+    for DATABASE in $SCHEMA_ONLY_DB_LIST
+    do
+      echo "Performing schema-only backup of $DATABASE..."
+    
+      if ! $MYSQLDUMP --no-data -h $HOSTNAME -u $USERNAME -p$PASSWORD $DATABASE | $GZIP -9 > $FINAL_BACKUP_DIR"$DATABASE"_SCHEMA.sql.gz.in_progress;
+      then
+	showErrorAndExit "Failed to backup database schema of $DATABASE database"
+      else
+	$MV $FINAL_BACKUP_DIR"$DATABASE"_SCHEMA.sql.gz.in_progress $FINAL_BACKUP_DIR"$DATABASE"_SCHEMA.sql.gz
+	echo "  done!"
+      fi
+    done
+    
+    echo -e "\nAll $PERIOD schema-only backups complete!"
+  else
+    echo -e "There are no databases matched for $PERIOD schema-only backup.\n"
+  fi
+  
+  #### Full backups ####
+  echo -e "\nFull backups ($PERIOD)"
+  echo -e "--------------------------------------------"
+
+  if [[ $FULL_BACKUP_DB_LIST ]];
+  then
+    echo -e "The following databases were matched for $PERIOD full backup:\n${FULL_BACKUP_DB_LIST}\n"
+    
+    for DATABASE in $FULL_BACKUP_DB_LIST
+    do
+      echo "Performing full backup of $DATABASE..."
+    
+      if ! $MYSQLDUMP -h $HOSTNAME -u $USERNAME -p$PASSWORD $DATABASE | $GZIP -9 > $FINAL_BACKUP_DIR"$DATABASE".sql.gz.in_progress;
+      then
+	showErrorAndExit "Failed to produce backup of $DATABASE database"
+      else
+	$MV $FINAL_BACKUP_DIR"$DATABASE".sql.gz.in_progress $FINAL_BACKUP_DIR"$DATABASE".sql.gz
+	echo "  done!"
+      fi
+    done
+
+    echo -e "\nAll $PERIOD database backups complete!"
+  else
+    echo -e "There are no databases matched for $PERIOD full backup.\n"
+  fi
+}
+
+
+################################################################################
+# MAIN
+################################################################################
+#### Load config settings ####
+CONFIG_FILE_PATH=$1
+
+if [ ! -r ${CONFIG_FILE_PATH} ];
+then
+  showErrorAndExit "Could not load config file from ${CONFIG_FILE_PATH}"
+fi
+
+#source "${CONFIG_FILE_PATH}"
+. "${CONFIG_FILE_PATH}"
+
+#### Pre-backup checks ####
+# Make sure we're running as the required backup user
+if [ $BACKUP_USER != "" -a "$($ID -un)" != "$BACKUP_USER" ];
+then
+  showErrorAndExit "This script must be run as $BACKUP_USER."
+fi
+
+#### Initialise defaults ####
+if [ ! $HOSTNAME ];
+then
+  HOSTNAME="localhost"
+fi;
+
+if [ ! $USERNAME ];
+then
+  USERNAME="root"
+fi;
+
+#### Prepare backup directory ####
+# Create main directory where backups will be stored, if needed
+[ ! -d $BACKUP_DIR ] && $MKDIR -p $BACKUP_DIR || :
+
+# Only root can access it!
+$CHOWN 0.0 -R $BACKUP_DIR
+$CHMOD 0600 $BACKUP_DIR
+
+# Rock 'n Roll!!
+#### Monthly backups ####
+DAY_OF_MONTH=`$DATE +%d`
+if [ $DAY_OF_MONTH -eq 1 ];
+then
+  # Delete all expired monthly directories
+  $FIND $BACKUP_DIR -maxdepth 1 -name "*-monthly" -exec rm -rf '{}' ';'
+  
+  doBackups "monthly"
+  
+  # That's all folks!
+  exit 0
+fi
+
+#### Weekly backups ####
+DAY_OF_WEEK=`$DATE +%u` #1-7 (Monday-Sunday)
+EXPIRED_DAYS=`$EXPR $((($WEEKS_TO_KEEP * 7) + 1))`
+if [ $DAY_OF_WEEK = $DAY_OF_WEEK_TO_KEEP ];
+then
+  # Delete all expired weekly directories
+  $FIND $BACKUP_DIR -maxdepth 1 -mtime +$EXPIRED_DAYS -name "*-weekly" -exec rm -rf '{}' ';'
+  
+  doBackups "weekly"
+  
+  # That's all folks!
+  exit 0
+fi
+
+#### Daily backups ####
+# Delete all expired daily directories
+$FIND $BACKUP_DIR -maxdepth 1 -mtime +$DAYS_TO_KEEP -name "*-daily" -exec rm -rf '{}' ';'
+
+doBackups "daily"
+
+# That's all folks!
+exit 0
