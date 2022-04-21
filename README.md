@@ -1,6 +1,6 @@
 # Backups automágicos de BBDD MariaDB / MySQL
 
-Pequeño *script* de *bash* para llevar a cabo copias de seguridad de bases de datos MariaDB y MySQL, al que acompaña un fichero de configuración donde se definen los modos de ejecución de
+Pequeño *script* de *bash* para llevar a cabo copias de seguridad de bases de datos MariaDB y MySQL, al que acompaña un fichero de configuración donde se definen sus modos de ejecución.
 
 
 ## Opciones del «backup» a partir del fichero de configuración
@@ -16,7 +16,7 @@ Pequeño *script* de *bash* para llevar a cabo copias de seguridad de bases de d
 * WEEKS_TO_KEEP → Número de semanas que se conserva el _backup_ semanal.
 
 Ejemplo de fichero de configuración:
-<pre>
+```
 BACKUP_USER=
 
 HOSTNAME=
@@ -39,4 +39,4 @@ DAY_OF_WEEK_TO_KEEP=7
 DAYS_TO_KEEP=7
  
 WEEKS_TO_KEEP=5
-</pre>
+```
